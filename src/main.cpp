@@ -7,21 +7,60 @@ NBClient client;
 
 String apn = "iot.tele2.com"; // Tele2 IoT APN
 
-// Helper om AT-commando’s te sturen
-String sendAT(const char *cmd, unsigned long timeout = 1500) {
+// Helper om AT-commando's te sturen (met ruwe console logging)
+String sendAT(const char *cmd, unsigned long timeout = 2500) {
+  // Leeg eventuele buffer (URCs)
+  while (SerialSARA.available()) {
+    char c = SerialSARA.read();
+    Serial.write(c);
+  }
+  Serial.print("AT> ");
+  Serial.println(cmd);
   SerialSARA.print(cmd);
   SerialSARA.print("\r");
 
   String resp;
+  String line;
   unsigned long start = millis();
   while (millis() - start < timeout) {
     while (SerialSARA.available()) {
       char c = SerialSARA.read();
       resp += c;
+      if (c == '\r') continue;
+      if (c == '\n') {
+        if (line.length()) {
+          Serial.print("AT< ");
+          Serial.println(line);
+          line = "";
+        }
+      } else {
+        line += c;
+      }
     }
+    yield();
+  }
+  if (line.length()) {
+    Serial.print("AT< ");
+    Serial.println(line);
   }
   resp.trim();
   return resp;
+}
+
+static void ensureURCsVerbose() {
+  sendAT("AT+CMEE=2");
+  sendAT("AT+CEREG=2");
+  sendAT("AT+CGEREP=2,1");
+}
+
+static void ensureAPN(const String &apn) {
+  String cgdc = sendAT("AT+CGDCONT?");
+  if (cgdc.indexOf(apn) < 0) {
+    Serial.print("Setting APN to: "); Serial.println(apn);
+    String cmd = String("AT+CGDCONT=1,\"IP\",\"") + apn + "\"";
+    sendAT(cmd.c_str());
+    sendAT("AT+CGDCONT?");
+  }
 }
 
 bool checkStatus() {
@@ -76,6 +115,11 @@ void setup() {
     while (1);
   }
 
+  // Enable library AT debug and verbose URCs
+  MODEM.debug(Serial);
+  Serial.println("MODEM.debug enabled");
+  ensureURCsVerbose();
+
   // Forceer LTE-M (URAT=7)
   Serial.println("Configuring modem for LTE-M...");
   sendAT("AT+CFUN=0");
@@ -114,18 +158,29 @@ void loop() {
     if (reg) {
       Serial.print("-- Attaching with APN: ");
       Serial.println(apn);
+      ensureAPN(apn);
+      // Pre-attach diagnostics
+      sendAT("AT+CGATT?");
+      sendAT("AT+CGACT?");
+      sendAT("AT+CGPADDR");
+      sendAT("AT+CGCONTRDP");
+
       int status = nbAccess.begin(apn.c_str(), "", "");
       if (status == NB_READY) {
         Serial.println("APN attach successful!");
-        String pdp = sendAT("AT+CGPADDR");
-        Serial.println("PDP context: " + pdp);
+        // Post-attach diagnostics
+        sendAT("AT+CGPADDR");
+        sendAT("AT+CGCONTRDP");
         attached = true;
       } else {
         Serial.print("APN attach failed, status=");
         Serial.println(status);
-        Serial.println(sendAT("AT+CGATT?"));
-        Serial.println(sendAT("AT+CEREG?"));
-        Serial.println(sendAT("AT+CSQ"));
+        sendAT("AT+CGATT?");
+        sendAT("AT+CGACT?");
+        sendAT("AT+CGPADDR");
+        sendAT("AT+CGCONTRDP");
+        sendAT("AT+CEREG?");
+        sendAT("AT+CSQ");
       }
     } else {
       Serial.println("Not registered yet; will retry...");
