@@ -7,7 +7,10 @@ NBClient client;
 NB_SMS sms;
 
 String apn = "iot.tele2.com"; // Tele2 IoT APN
-static const bool VERBOSE_AT = false; // uitgebreide logging uit, zet op true voor debug
+static const bool VERBOSE_AT = true; // zet op true voor uitgebreide logging
+// SMS configuratie: pas nummer en tekst aan
+String smsNumber = "number";               // NL 06-nummer
+String smsMessage = "Hallo vanaf MKR NB1500";  // Berichttekst
 
 // Helper om AT-commando's te sturen (met ruwe console logging)
 String sendAT(const char *cmd, unsigned long timeout = 2500) {
@@ -72,31 +75,6 @@ static void initSmsStack() {
     sendAT("AT+CSMS?", 2000);
     sendAT("AT+CSCA?", 2000);
   }
-}
-
-// Stuur een SMS-bericht. Verwacht internationaal nummer in E.164 (bijv. "+316...")
-static bool sendSms(const String &e164Number, const String &text) {
-  // Zorg dat de NB-library in een geldige staat is zonder modem herstart
-  NB_NetworkStatus_t st = nbAccess.begin(0, false, true);
-  if (VERBOSE_AT) {
-    Serial.print("NB.begin status: "); Serial.println((int)st);
-  }
-  initSmsStack();
-
-  Serial.print("SMS: sturen naar "); Serial.println(e164Number);
-  if (!sms.beginSMS(e164Number.c_str())) {
-    Serial.println("SMS: FAILED (begin)");
-    if (VERBOSE_AT) sendAT("AT+CEER", 2000);
-    return false;
-  }
-  sms.print(text);
-  if (!sms.endSMS()) {
-    Serial.println("SMS: FAILED (end)");
-    if (VERBOSE_AT) sendAT("AT+CEER", 2000);
-    return false;
-  }
-  Serial.println("SMS: OK");
-  return true;
 }
 
 static void ensureAPN(const String &apn) {
@@ -179,6 +157,16 @@ static bool manualPdpAttach(const String &apn, int cid = 1) {
     sendAT("AT+CGCONTRDP", 3000);
   }
   return true;
+}
+
+static String normalizeNLNumber(const String &num) {
+  String n = num; n.trim();
+  if (n.startsWith("+")) return n;
+  if (n.startsWith("06")) {
+    String rest = n.substring(1);
+    return String("+31") + rest;
+  }
+  return n;
 }
 
 static String getLocalIPOnce() {
@@ -306,6 +294,30 @@ void loop() {
         if (ip.length()) Serial.println(String("IP: ") + ip);
         else Serial.println("IP: (unknown)");
         attached = true;
+        static bool smsSent = false;
+        if (!smsSent) {
+          // Ensure NB library state is initialized for SMS without modem restart
+          NB_NetworkStatus_t st = nbAccess.begin(0, false, true);
+          if (VERBOSE_AT) {
+            Serial.print("NB.begin status: "); Serial.println((int)st);
+          }
+          initSmsStack();
+          String e164 = normalizeNLNumber(smsNumber);
+          Serial.print("SMS: sturen naar "); Serial.println(e164);
+          if (sms.beginSMS(e164.c_str())) {
+            sms.print(smsMessage);
+            if (sms.endSMS()) {
+              Serial.println("SMS: OK");
+            } else {
+              Serial.println("SMS: FAILED (end)");
+              if (VERBOSE_AT) sendAT("AT+CEER", 2000);
+            }
+          } else {
+            Serial.println("SMS: FAILED (begin)");
+            if (VERBOSE_AT) sendAT("AT+CEER", 2000);
+          }
+          smsSent = true;
+        }
       } else {
         Serial.println("Attach: FAILED");
       }
