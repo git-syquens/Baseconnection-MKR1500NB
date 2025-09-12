@@ -7,9 +7,9 @@ NBClient client;
 NB_SMS sms;
 
 String apn = "iot.tele2.com"; // Tele2 IoT APN
-static const bool VERBOSE_AT = false; // zet op true voor uitgebreide logging
+static const bool VERBOSE_AT = true; // zet op true voor uitgebreide logging
 // SMS configuratie: pas nummer en tekst aan
-String smsNumber = "0612345678";               // NL 06-nummer
+String smsNumber = "+31628740395";               // NL 06-nummer
 String smsMessage = "Hallo vanaf MKR NB1500";  // Berichttekst
 
 // Helper om AT-commando's te sturen (met ruwe console logging)
@@ -64,6 +64,16 @@ static void ensureURCsVerbose() {
   } else {
     sendAT("AT+CMEE=1");
     sendAT("AT+CEREG=0");
+  }
+}
+
+static void initSmsStack() {
+  // Text mode SMS and character set; show SMSC for diagnostics
+  sendAT("AT+CMGF=1");
+  sendAT("AT+CSCS=\"GSM\"");
+  if (VERBOSE_AT) {
+    sendAT("AT+CSMS?", 2000);
+    sendAT("AT+CSCA?", 2000);
   }
 }
 
@@ -286,6 +296,12 @@ void loop() {
         attached = true;
         static bool smsSent = false;
         if (!smsSent) {
+          // Ensure NB library state is initialized for SMS without modem restart
+          NB_NetworkStatus_t st = nbAccess.begin(0, false, true);
+          if (VERBOSE_AT) {
+            Serial.print("NB.begin status: "); Serial.println((int)st);
+          }
+          initSmsStack();
           String e164 = normalizeNLNumber(smsNumber);
           Serial.print("SMS: sturen naar "); Serial.println(e164);
           if (sms.beginSMS(e164.c_str())) {
@@ -294,9 +310,11 @@ void loop() {
               Serial.println("SMS: OK");
             } else {
               Serial.println("SMS: FAILED (end)");
+              if (VERBOSE_AT) sendAT("AT+CEER", 2000);
             }
           } else {
             Serial.println("SMS: FAILED (begin)");
+            if (VERBOSE_AT) sendAT("AT+CEER", 2000);
           }
           smsSent = true;
         }
