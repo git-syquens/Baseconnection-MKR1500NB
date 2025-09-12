@@ -63,6 +63,76 @@ static void ensureAPN(const String &apn) {
   }
 }
 
+// --- Modem aliveness and manual PDP attach helpers ---
+static bool waitModemAlive(unsigned long timeoutMs = 15000) {
+  unsigned long start = millis();
+  while (millis() - start < timeoutMs) {
+    String r = sendAT("AT", 800);
+    if (r.indexOf("OK") >= 0) return true;
+    delay(200);
+  }
+  return false;
+}
+
+static bool ensureModemOn() {
+  if (waitModemAlive(2000)) return true;
+  Serial.println("Modem not responding; powering on via modem.begin()...");
+  if (!modem.begin()) return false;
+  delay(1000);
+  return waitModemAlive(10000);
+}
+
+static bool waitForAttach(unsigned long timeoutMs = 30000) {
+  unsigned long start = millis();
+  while (millis() - start < timeoutMs) {
+    String r = sendAT("AT+CGATT?", 1000);
+    if (r.indexOf("+CGATT: 1") >= 0) return true;
+    delay(500);
+  }
+  return false;
+}
+
+static bool waitPdpActive(int cid = 1, unsigned long timeoutMs = 30000) {
+  unsigned long start = millis();
+  while (millis() - start < timeoutMs) {
+    String r = sendAT("AT+CGACT?", 1000);
+    String needle = String("+CGACT: ") + cid + ",1";
+    if (r.indexOf(needle) >= 0) return true;
+    delay(500);
+  }
+  return false;
+}
+
+static bool manualPdpAttach(const String &apn, int cid = 1) {
+  if (!ensureModemOn()) {
+    Serial.println("Failed to ensure modem on");
+    return false;
+  }
+  ensureURCsVerbose();
+  ensureAPN(apn);
+
+  // Attach packet domain
+  sendAT("AT+CGATT=1", 5000);
+  if (!waitForAttach(60000)) {
+    Serial.println("Timed out waiting for CGATT:1");
+    return false;
+  }
+
+  // Activate PDP context
+  char cmd[24];
+  snprintf(cmd, sizeof(cmd), "AT+CGACT=1,%d", cid);
+  sendAT(cmd, 10000);
+  if (!waitPdpActive(cid, 60000)) {
+    Serial.println("Timed out waiting for CGACT active");
+    return false;
+  }
+
+  // Show resulting IP parameters
+  sendAT("AT+CGPADDR", 3000);
+  sendAT("AT+CGCONTRDP", 3000);
+  return true;
+}
+
 bool checkStatus() {
   bool registered = false;
 
@@ -131,6 +201,9 @@ void setup() {
 
   // Check status
   bool reg = checkStatus();
+  // Skip library attach in setup; use manual attach in loop
+  Serial.println("(Info) Skipping nbAccess.begin in setup; using manual attach in loop.");
+  return;
 
   // Probeer APN attach
   if (reg) {
@@ -159,22 +232,12 @@ void loop() {
       Serial.print("-- Attaching with APN: ");
       Serial.println(apn);
       ensureAPN(apn);
-      // Pre-attach diagnostics
-      sendAT("AT+CGATT?");
-      sendAT("AT+CGACT?");
-      sendAT("AT+CGPADDR");
-      sendAT("AT+CGCONTRDP");
-
-      int status = nbAccess.begin(apn.c_str(), "", "");
-      if (status == NB_READY) {
-        Serial.println("APN attach successful!");
-        // Post-attach diagnostics
-        sendAT("AT+CGPADDR");
-        sendAT("AT+CGCONTRDP");
+      bool ok = manualPdpAttach(apn, 1);
+      if (ok) {
+        Serial.println("APN attach successful (manual)!");
         attached = true;
       } else {
-        Serial.print("APN attach failed, status=");
-        Serial.println(status);
+        Serial.println("APN attach failed (manual). Diagnostics:");
         sendAT("AT+CGATT?");
         sendAT("AT+CGACT?");
         sendAT("AT+CGPADDR");
