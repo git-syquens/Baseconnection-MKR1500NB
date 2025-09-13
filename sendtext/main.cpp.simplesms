@@ -1,0 +1,51 @@
+// Minimal MKR NB1500: connect and send one SMS
+#include <Arduino.h>
+#include <MKRNB.h>
+
+// Network and SMS config
+static const char* SIM_PIN    = "";                 // SIM PIN (empty if none)
+static const char* APN        = "iot.tele2.com";    // Tele2 IoT APN
+static const char* APN_USER   = "";
+static const char* APN_PASS   = "";
+static const char* SMS_NUMBER = "+31628740395";           // Destination number (use +CC format)
+static const char* SMS_TEXT   = "Hallo vanaf MKR NB1500";
+
+NB nbAccess;
+NB_SMS sms;
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) {}
+
+  Serial.println("MKR NB1500: connect & send SMS");
+
+  // Attach to the network (synchronous)
+  NB_NetworkStatus_t st = nbAccess.begin(SIM_PIN, APN, APN_USER, APN_PASS, true, true);
+  if (st != NB_READY) {
+    Serial.print("Network attach failed, status=");
+    Serial.println((int)st);
+    while (true) { delay(1000); }
+  }
+
+  Serial.println("Network ready");
+
+  // Send a single SMS
+  Serial.print("Sending SMS to ");
+  Serial.println(SMS_NUMBER);
+  if (sms.beginSMS(SMS_NUMBER)) {
+    sms.print(SMS_TEXT);
+    if (sms.endSMS()) {
+      Serial.println("SMS sent");
+    } else {
+      Serial.println("SMS failed (end)");
+    }
+  } else {
+    Serial.println("SMS failed (begin)");
+  }
+}
+
+void loop() {
+  // Idle: basic pause so the port stays readable
+  delay(2000);
+}
+
