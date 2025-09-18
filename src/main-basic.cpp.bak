@@ -178,7 +178,7 @@ void setup() {
   Serial.begin(115200);
   while (!Serial) {}
 
-  Serial.println("=== Tele2 IoT LTE-M Attach Test ===");
+  Serial.println("=== Tele2 IoT LTE-M Attach ===");
 
   if (!modem.begin()) {
     Serial.println("❌ Modem not responding");
@@ -199,9 +199,31 @@ void setup() {
   sendAT("AT+CFUN=1");
   delay(4000);
 
-  // Initial status snapshot
-  checkStatus();
+
+void loop() {
+  bool reg = checkStatus();
+  // Skip library attach in setup; use manual attach in loop
+  Serial.println("(Info) Skipping nbAccess.begin in setup; using manual attach in loop.");
+  return;
+
+  // Probeer APN attach
+  if (reg) {
+    Serial.print("➡️ Attaching with APN: ");
+    Serial.println(apn);
+    int status = nbAccess.begin(apn.c_str(), "", "");
+    if (status == NB_READY) {
+      Serial.println("✅ APN attach successful!");
+      String pdp = sendAT("AT+CGPADDR");
+      Serial.println("PDP context: " + pdp);
+    } else {
+      Serial.print("❌ APN attach failed, status=");
+      Serial.println(status);
+    }
+  } else {
+    Serial.println("⚠️ Not registered, skipping APN attach");
+  }
 }
+
 void loop() {
   static bool attached = false;
 
@@ -213,10 +235,10 @@ void loop() {
       ensureAPN(apn);
       bool ok = attachPdp(apn, 1);
       if (ok) {
-        Serial.println("APN attach successful (manual)!");
+        Serial.println("APN attach successful");
         attached = true;
       } else {
-        Serial.println("APN attach failed (manual). Diagnostics:");
+        Serial.println("APN attach failed. Diagnostics:");
         sendAT("AT+CGATT?");
         sendAT("AT+CGACT?");
         sendAT("AT+CGPADDR");
