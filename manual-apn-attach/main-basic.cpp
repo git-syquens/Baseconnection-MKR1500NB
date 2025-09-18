@@ -190,11 +190,11 @@ void setup() {
   Serial.println("MODEM.debug enabled");
   ensureURCsVerbose();
 
-  // Force LTE-M (URAT=8)
+  // Forceer LTE-M (URAT=7)
   Serial.println("Configuring modem for LTE-M...");
   sendAT("AT+CFUN=0");
   delay(500);
-  sendAT("AT+URAT=8");
+  sendAT("AT+URAT=7");
   delay(500);
   sendAT("AT+CFUN=1");
   delay(4000);
@@ -203,7 +203,24 @@ void setup() {
   bool reg = checkStatus();
   // Skip library attach in setup; use manual attach in loop
   Serial.println("(Info) Skipping nbAccess.begin in setup; using manual attach in loop.");
-  (void)reg;
+  return;
+
+  // Probeer APN attach
+  if (reg) {
+    Serial.print("➡️ Attaching with APN: ");
+    Serial.println(apn);
+    int status = nbAccess.begin(apn.c_str(), "", "");
+    if (status == NB_READY) {
+      Serial.println("✅ APN attach successful!");
+      String pdp = sendAT("AT+CGPADDR");
+      Serial.println("PDP context: " + pdp);
+    } else {
+      Serial.print("❌ APN attach failed, status=");
+      Serial.println(status);
+    }
+  } else {
+    Serial.println("⚠️ Not registered, skipping APN attach");
+  }
 }
 
 void loop() {

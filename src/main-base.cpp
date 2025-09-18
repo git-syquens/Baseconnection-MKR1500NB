@@ -1,9 +1,11 @@
 #include <Arduino.h>
 #include <MKRNB.h>
+#include <MQTT.h>
 
 NB nbAccess;
 NBModem modem;
 NBClient client;
+MQTTClient mqttClient(128);
 
 String apn = "m2m.tele2.com"; // Tele2 IoT APN
 
@@ -49,7 +51,7 @@ String sendAT(const char *cmd, unsigned long timeout = 2500) {
 
 static void ensureURCsVerbose() {
   sendAT("AT+CMEE=2");
-  sendAT("AT+CEREG=2");
+  sendAT("AT+CEREG=4");
   sendAT("AT+CGEREP=2,1");
 }
 
@@ -101,6 +103,27 @@ static bool waitPdpActive(int cid = 1, unsigned long timeoutMs = 30000) {
     delay(500);
   }
   return false;
+}
+
+static void forceRatWithReboot(int rat) {
+  Serial.print("Configuring modem for RAT ");
+  Serial.println(rat);
+
+  sendAT("AT+CFUN=0", 4000);
+  delay(500);
+
+  String cmd = String("AT+URAT=") + rat;
+  sendAT(cmd.c_str(), 4000);
+  delay(500);
+
+  Serial.println("Rebooting modem to apply RAT setting...");
+  sendAT("AT+CFUN=1,1", 8000);
+
+  // Allow the modem to restart fully
+  delay(7000);
+  waitModemAlive(15000);
+
+  ensureURCsVerbose();
 }
 
 static bool manualPdpAttach(const String &apn, int cid = 1) {
@@ -190,43 +213,53 @@ void setup() {
   Serial.println("MODEM.debug enabled");
   ensureURCsVerbose();
 
-  // Force LTE-M (URAT=8)
-  Serial.println("Configuring modem for LTE-M...");
-  sendAT("AT+CFUN=0");
-  delay(500);
-  sendAT("AT+URAT=8");
-  delay(500);
-  sendAT("AT+CFUN=1");
-  delay(4000);
+  // Force LTE-M (URAT=8) with a controlled reboot so the setting sticks
+  forceRatWithReboot(8);
+  ensureAPN(apn);
 
-  // Check status
-  bool reg = checkStatus();
-  // Skip library attach in setup; use manual attach in loop
-  Serial.println("(Info) Skipping nbAccess.begin in setup; using manual attach in loop.");
-  (void)reg;
+  // Check status (loop will handle attach sequencing)
+  (void)checkStatus();
+  Serial.println("(Info) Attach attempts will start in loop using manual PDP activation.");
 }
 
 void loop() {
   static bool attached = false;
+  static bool published = false;
+  static uint8_t manualAttempts = 0;
+  static unsigned long nextManualAttemptMs = 0;
 
   if (!attached) {
     bool reg = checkStatus();
     if (reg) {
-      Serial.print("-- Attaching with APN: ");
-      Serial.println(apn);
-      ensureAPN(apn);
-      bool ok = manualPdpAttach(apn, 1);
-      if (ok) {
-        Serial.println("APN attach successful (manual)!");
-        attached = true;
-      } else {
-        Serial.println("APN attach failed (manual). Diagnostics:");
-        sendAT("AT+CGATT?");
-        sendAT("AT+CGACT?");
-        sendAT("AT+CGPADDR");
-        sendAT("AT+CGCONTRDP");
-        sendAT("AT+CEREG?");
-        sendAT("AT+CSQ");
+      unsigned long now = millis();
+      if (now >= nextManualAttemptMs) {
+        manualAttempts++;
+        Serial.print("-- Manual attach attempt ");
+        Serial.println(manualAttempts);
+        ensureAPN(apn);
+        bool ok = manualPdpAttach(apn, 1);
+        if (ok) {
+          Serial.println("APN attach successful (manual)!");
+          attached = true;
+          manualAttempts = 0;
+          nextManualAttemptMs = 0;
+        } else {
+          Serial.println("APN attach failed (manual). Diagnostics:");
+          sendAT("AT+CGATT?");
+          sendAT("AT+CGACT?");
+          sendAT("AT+CGPADDR");
+          sendAT("AT+CGCONTRDP");
+          sendAT("AT+CEREG?");
+          sendAT("AT+CSQ");
+          // Back off before the next attempt to respect network timers (e.g. T3396)
+          nextManualAttemptMs = now + 30000UL;
+          if (manualAttempts >= 3) {
+            Serial.println("Multiple manual failures; reinitialising RAT and modem...");
+            forceRatWithReboot(8);
+            manualAttempts = 0;
+            nextManualAttemptMs = millis() + 10000UL;
+          }
+        }
       }
     } else {
       Serial.println("Not registered yet; will retry...");
@@ -239,6 +272,27 @@ void loop() {
     }
     delay(2000);
   } else {
+    if (!published) {
+      Serial.println("Connecting to MQTT broker to publish heartbeat...");
+      client.stop();
+      mqttClient.begin("mqtt.syquens.com", 1883, client);
+
+      String clientId = String("MKR1500NB-") + String(millis(), HEX);
+      if (mqttClient.connect(clientId.c_str())) {
+        Serial.println("MQTT connected, publishing message");
+        if (mqttClient.publish("/mkr1500nb/live", "hi there")) {
+          Serial.println("Message published to /mkr1500nb/live");
+        } else {
+          Serial.println("Failed to publish message");
+        }
+        mqttClient.disconnect();
+      } else {
+        Serial.print("MQTT connect failed, error=");
+        Serial.println((int)mqttClient.lastError());
+      }
+      published = true;
+    }
+
     // Heartbeat when attached
     digitalWrite(LED_BUILTIN, HIGH); delay(40);
     digitalWrite(LED_BUILTIN, LOW);  delay(1960);

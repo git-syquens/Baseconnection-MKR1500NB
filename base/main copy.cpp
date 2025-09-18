@@ -1,9 +1,11 @@
 #include <Arduino.h>
 #include <MKRNB.h>
+#include <MQTT.h>
 
 NB nbAccess;
 NBModem modem;
 NBClient client;
+MQTTClient mqttClient(128);
 
 String apn = "m2m.tele2.com"; // Tele2 IoT APN
 
@@ -208,6 +210,7 @@ void setup() {
 
 void loop() {
   static bool attached = false;
+  static bool published = false;
 
   if (!attached) {
     bool reg = checkStatus();
@@ -239,6 +242,27 @@ void loop() {
     }
     delay(2000);
   } else {
+    if (!published) {
+      Serial.println("Connecting to MQTT broker to publish heartbeat...");
+      client.stop();
+      mqttClient.begin("mqtt.syquens.com", 1883, client);
+
+      String clientId = String("MKR1500NB-") + String(millis(), HEX);
+      if (mqttClient.connect(clientId.c_str())) {
+        Serial.println("MQTT connected, publishing message");
+        if (mqttClient.publish("/mkr1500nb/live", "hi there")) {
+          Serial.println("Message published to /mkr1500nb/live");
+        } else {
+          Serial.println("Failed to publish message");
+        }
+        mqttClient.disconnect();
+      } else {
+        Serial.print("MQTT connect failed, error=");
+        Serial.println((int)mqttClient.lastError());
+      }
+      published = true;
+    }
+
     // Heartbeat when attached
     digitalWrite(LED_BUILTIN, HIGH); delay(40);
     digitalWrite(LED_BUILTIN, LOW);  delay(1960);
